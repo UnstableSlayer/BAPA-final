@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Meeting Assistant</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+  <h1>Meeting Transcriber & Analyzer</h1>
+
+  <!-- Upload Audio -->
+  <form id="uploadForm">
+    <label for="audioFile">Select audio file (.mp3, .wav, .m4a, .mp4):</label>
+    <input type="file" id="audioFile" name="audio" accept=".mp3,.wav,.m4a,.mp4" required>
+    <button type="submit">Transcribe</button>
+  </form>
+
+  <h2>Transcript</h2>
+  <textarea id="transcript" rows="15" cols="100" placeholder="Transcript will appear here..."></textarea>
+
+  <!-- Analyze Transcript -->
+  <button id="analyzeButton">Analyze Transcript</button>
+
+  <h2>Analysis</h2>
+  <pre id="analysisResult"></pre>
+
+  <script>
+    // Transcription
+    document.getElementById('uploadForm').addEventListener('submit', async function(e) {
+      e.preventDefault();
+      const fileInput = document.getElementById('audioFile');
+      const formData = new FormData();
+      formData.append('audio', fileInput.files[0]);
+
+      const response = await fetch('/transcribe', {
+        method: 'POST',
+        body: formData
+      });
+
+      const data = await response.json();
+      if (data.transcript) {
+        document.getElementById('transcript').value = data.transcript;
+      } else {
+        alert('Error: ' + (data.error || 'Unknown'));
+      }
+    });
+
+    // Analysis
+    document.getElementById('analyzeButton').addEventListener('click', async function() {
+      const text = document.getElementById('transcript').value;
+      const response = await fetch('/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ transcript: text })
+      });
+
+      const data = await response.json();
+      document.getElementById('analysisResult').textContent =
+        JSON.stringify(data, null, 2);
+    });
+  </script>
+</body>
+</html>
