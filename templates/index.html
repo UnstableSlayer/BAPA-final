@@ -1,63 +1,344 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <title>Meeting Assistant</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Meeting Transcription & Analysis</title>
 </head>
 <body>
-  <h1>Meeting Transcriber & Analyzer</h1>
+    <h1>Meeting Transcription & Analysis</h1>
+    
+    <div id="status" style="margin: 10px; color: green;"></div>
+    <div id="error" style="margin: 10px; color: red;"></div>
 
-  <!-- Upload Audio -->
-  <form id="uploadForm">
-    <label for="audioFile">Select audio file (.mp3, .wav, .m4a, .mp4):</label>
-    <input type="file" id="audioFile" name="audio" accept=".mp3,.wav,.m4a,.mp4" required>
-    <button type="submit">Transcribe</button>
-  </form>
+    <!-- Audio Upload Section -->
+    <div>
+        <h2>Upload Audio File</h2>
+        <input type="file" id="audioFile" accept="audio/*,video/*">
+        <button onclick="transcribeAudio()">Transcribe</button>
+    </div>
 
-  <h2>Transcript</h2>
-  <textarea id="transcript" rows="15" cols="100" placeholder="Transcript will appear here..."></textarea>
+    <!-- Transcript Section -->
+    <div>
+        <h2>Transcript</h2>
+        <textarea id="transcript" rows="10" cols="80" placeholder="Transcript will appear here..."></textarea>
+        <br>
+        <button onclick="analyzeTranscript()">Analyze Transcript</button>
+    </div>
 
-  <!-- Analyze Transcript -->
-  <button id="analyzeButton">Analyze Transcript</button>
+    <!-- Analysis Results -->
+    <div id="analysisResults">
+        <h2>Analysis Results</h2>
+        <div id="summary"></div>
+        <div id="decisions"></div>
+        <div id="actionItems"></div>
+        <div id="followUpMeetings"></div>
+        <div id="functionCalls"></div>
+    </div>
 
-  <h2>Analysis</h2>
-  <pre id="analysisResult"></pre>
+    <!-- Predict meeting effectiveness-->
+    <h2>Prediction</h2>
+    <button onclick="predictMeetingEffectiveness()">Predict Effectiveness of current transcript</button>
+    <div id="prediction"></div>
 
-  <script>
-    // Transcription
-    document.getElementById('uploadForm').addEventListener('submit', async function(e) {
-      e.preventDefault();
-      const fileInput = document.getElementById('audioFile');
-      const formData = new FormData();
-      formData.append('audio', fileInput.files[0]);
+    <!-- Semantic Search -->
+    <h2>Semantic Search (Tasks & Calendar)</h2>
+    <form onsubmit="searchSemantic(event)">
+        <input type="text" id="searchInput" placeholder="Search tasks or calendar..." required>
+        <button type="submit">Search</button>
+    </form>
+    <textarea id="searchResults" rows="6" cols="80" readonly></textarea>
 
-      const response = await fetch('/transcribe', {
-        method: 'POST',
-        body: formData
-      });
 
-      const data = await response.json();
-      if (data.transcript) {
-        document.getElementById('transcript').value = data.transcript;
-      } else {
-        alert('Error: ' + (data.error || 'Unknown'));
-      }
-    });
+    <!-- Calendar Section -->
+    <div>
+        <h2>Calendar Events</h2>
+        <table border="1">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Title</th>
+                    <th>Date</th>
+                    <th>Time</th>
+                    <th>Duration</th>
+                    <th>Attendees</th>
+                </tr>
+            </thead>
+            <tbody id="calendarEvents">
+                {% for event in calendar.events %}
+                <tr>
+                    <td>{{ event.id }}</td>
+                    <td>{{ event.title }}</td>
+                    <td>{{ event.date }}</td>
+                    <td>{{ event.time }}</td>
+                    <td>{{ event.duration }}</td>
+                    <td>{{ event.attendees | join(', ') }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        <button onclick="refreshCalendar()">Refresh Calendar</button>
+    </div>
 
-    // Analysis
-    document.getElementById('analyzeButton').addEventListener('click', async function() {
-      const text = document.getElementById('transcript').value;
-      const response = await fetch('/analyze', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ transcript: text })
-      });
+    <!-- Tasks Section -->
+    <div>
+        <h2>Tasks</h2>
+        <table border="1">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Title</th>
+                    <th>Description</th>
+                    <th>Assignee</th>
+                    <th>Due Date</th>
+                    <th>Priority</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody id="tasksList">
+                {% for task in tasks.tasks %}
+                <tr>
+                    <td>{{ task.id }}</td>
+                    <td>{{ task.title }}</td>
+                    <td>{{ task.description }}</td>
+                    <td>{{ task.assignee }}</td>
+                    <td>{{ task.due_date }}</td>
+                    <td>{{ task.priority }}</td>
+                    <td>{{ task.status }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        <button onclick="refreshTasks()">Refresh Tasks</button>
+    </div>
 
-      const data = await response.json();
-      document.getElementById('analysisResult').textContent =
-        JSON.stringify(data, null, 2);
-    });
-  </script>
+    <script>
+        async function transcribeAudio() {
+            clearMessages();
+            
+            const fileInput = document.getElementById('audioFile');
+            const file = fileInput.files[0];
+            
+            if (!file) {
+                setError("Please select an audio file.");
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('audio', file);
+
+            setStatus("Uploading and transcribing audio...");
+
+            try {
+                const response = await fetch('/transcribe', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const result = await response.json();
+                
+                if (result.error) {
+                    setError(result.error || "Transcription failed.");
+                } else {
+                    document.getElementById('transcript').value = result.transcript;
+                    setStatus("Transcription complete.");
+                }
+            } catch (error) {
+                setError(error.message || "Transcription failed.");
+            }
+        }
+
+        async function analyzeTranscript() {
+            clearMessages();
+
+            const transcript = document.getElementById('transcript').value;
+
+            if (!transcript.trim()) {
+                setError("Transcript is empty.");
+                return;
+            }
+
+            setStatus("Analyzing transcript...");
+
+            try {
+                const response = await fetch('/analyze', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ transcript: transcript })
+                });
+                
+                const result = await response.json();
+                
+                if (result.error) {
+                    setError(result.error || "Analysis failed.");
+                } else {
+                    displayAnalysisResults(result);
+                    
+                    // Refresh calendar and tasks after analysis
+                    refreshCalendar();
+                    refreshTasks();
+
+                    setStatus("Analysis complete.");
+                }
+            } catch (error) {
+                setError(error.message || "Analysis failed.");
+            }
+        }
+
+        function displayAnalysisResults(result) {
+            const summaryDiv = document.getElementById('summary');
+            const decisionsDiv = document.getElementById('decisions');
+            const actionItemsDiv = document.getElementById('actionItems');
+            const followUpDiv = document.getElementById('followUpMeetings');
+            const functionCallsDiv = document.getElementById('functionCalls');
+
+            summaryDiv.innerHTML = '<h3>Summary</h3><p>' + (result.summary || 'No summary available') + '</p>';
+            
+            if (result.decisions && result.decisions.length > 0) {
+                decisionsDiv.innerHTML = '<h3>Decisions</h3><ul>' + 
+                    result.decisions.map(d => '<li>' + d + '</li>').join('') + '</ul>';
+            }
+            
+            if (result.action_items && result.action_items.length > 0) {
+                actionItemsDiv.innerHTML = '<h3>Action Items</h3><ul>' + 
+                    result.action_items.map(a => '<li>' + a + '</li>').join('') + '</ul>';
+            }
+            
+            if (result.follow_up_meetings && result.follow_up_meetings.length > 0) {
+                followUpDiv.innerHTML = '<h3>Follow-up Meetings</h3><ul>' + 
+                    result.follow_up_meetings.map(m => '<li>' + m + '</li>').join('') + '</ul>';
+            }
+            
+            if (result.function_calls && result.function_calls.length > 0) {
+                functionCallsDiv.innerHTML = '<h3>Actions Taken</h3><ul>' + 
+                    result.function_calls.map(fc => '<li><strong>' + fc.function + '</strong>: ' + fc.result + '</li>').join('') + '</ul>';
+            }
+        }
+
+        async function searchSemantic(event) {
+            event.preventDefault();
+            clearMessages();
+
+            const query = document.getElementById("searchInput").value.trim();
+            if (!query) {
+                setError("Search query cannot be empty.");
+                return;
+            }
+
+            setStatus("Searching...");
+
+            try {
+                const res = await fetch('/semantic_search', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ transcript: query })
+                });
+                const data = await res.json();
+
+                if (res.ok) {
+                    const output = data.search_results.map(r =>
+                        `• [${r.type.toUpperCase()}] ${r.text}`).join('\n\n');
+                    document.getElementById('searchResults').value = output || "No matches found.";
+                    setStatus("Search complete.");
+                } else {
+                    setError(data.error || "Search failed.");
+                }
+            } catch (err) {
+                setError(data.error || "Search failed.");
+            }
+        }
+
+        async function predictMeetingEffectiveness() {
+            clearMessages();
+            const transcript = document.getElementById('transcript').value;
+            
+            if (!transcript.trim()) {
+                setError("Transcript is empty.");
+                return;
+            }
+
+            setStatus("Predicting meeting effectiveness...");
+
+            const response = await fetch('/predict', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ transcript: transcript })
+            });
+
+            try {
+                const result = await response.json();
+                document.getElementById('prediction').textContent = result.prediction || 'No prediction.';
+                setStatus("Prediction complete.");
+            } catch (error) {
+                setError(error || "Prediction failed.");
+            }
+        }
+
+        async function refreshCalendar() {
+            try {
+                const response = await fetch('/calendar');
+                const calendar = await response.json();
+                
+                const tbody = document.getElementById('calendarEvents');
+                tbody.innerHTML = '';
+                
+                calendar.events.forEach(event => {
+                    const row = tbody.insertRow();
+                    row.innerHTML = `
+                        <td>${event.id}</td>
+                        <td>${event.title}</td>
+                        <td>${event.date}</td>
+                        <td>${event.time}</td>
+                        <td>${event.duration}</td>
+                        <td>${event.attendees.join(', ')}</td>
+                    `;
+                });
+            } catch (error) {
+                setError(error || "Calendar event display failed.");
+            }
+        }
+
+        async function refreshTasks() {
+            try {
+                const response = await fetch('/tasks');
+                const tasks = await response.json();
+                
+                const tbody = document.getElementById('tasksList');
+                tbody.innerHTML = '';
+                
+                tasks.tasks.forEach(task => {
+                    const row = tbody.insertRow();
+                    row.innerHTML = `
+                        <td>${task.id}</td>
+                        <td>${task.title}</td>
+                        <td>${task.description}</td>
+                        <td>${task.assignee}</td>
+                        <td>${task.due_date}</td>
+                        <td>${task.priority}</td>
+                        <td>${task.status}</td>
+                    `;
+                });
+            } catch (error) {
+                setError(error || "Tasks display failed.");
+            }
+        }
+    
+        function setStatus(msg) {
+            document.getElementById('status').textContent = msg;
+            document.getElementById('error').textContent = '';
+        }
+
+        function setError(msg) {
+            document.getElementById('error').textContent = msg;
+            document.getElementById('status').textContent = '';
+        }
+
+        function clearMessages() {
+            document.getElementById('status').textContent = '';
+            document.getElementById('error').textContent = '';
+        }
+    </script>
 </body>
 </html>
