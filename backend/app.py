@@ -2,6 +2,7 @@ from flask import Flask, request, jsonify, render_template
 from transcribe import transcribe_audio_file
 from analyze import analyze_transcript, get_calendar, get_tasks
 from semantic_search import reset_index, search_similar
+from visualize import generate_presentation_slides
 
 from predict import predict_meeting_effectiveness
 
@@ -11,18 +12,25 @@ app = Flask(__name__, template_folder="../templates", static_folder="../static")
 
 @app.route('/')
 def index():
-    calendar = get_calendar()
-    tasks = get_tasks()
-    return render_template("index.html", calendar=calendar, tasks=tasks)
+    try:
+        calendar = get_calendar()
+        tasks = get_tasks()
+        return render_template("index.html", calendar=calendar, tasks=tasks)
+    
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/transcribe', methods=['POST'])
 def transcribe():
     file = request.files.get('audio')
+
     if not file or file.filename == '':
         return jsonify({'error': 'No file provided'}), 400
+
     try:
         transcript = transcribe_audio_file(file)
         return jsonify({'transcript': transcript})
+
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -59,12 +67,30 @@ def predict():
         return jsonify({"error": str(e)}), 500
 
 @app.route('/semantic_search', methods=['POST'])
-def recommend():
+def semantic_search():
     query = request.get_json().get("transcript", "")
+
     if not query.strip():
         return jsonify({"error": "Empty query"}), 400
-    results = search_similar(query)
-    return jsonify({"search_results": results})
+
+    try:
+        results = search_similar(query)
+        return jsonify({"search_results": results})
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/visualize', methods=['POST'])
+def visualize():
+    data = request.get_json()
+    transcript_text = data.get("transcript", "")
+    
+    try:
+        slides = generate_presentation_slides(transcript_text)
+        return jsonify({'slides': slides})
+    
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500 
 
 @app.route('/calendar')
 def calendar_view():

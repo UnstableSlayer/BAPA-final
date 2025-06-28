@@ -112,15 +112,25 @@
         <button onclick="refreshTasks()">Refresh Tasks</button>
     </div>
 
+    <div>
+        <h2>Visual Summary</h2>
+        <button onclick="generateVisual()">Generate Image</button>
+        <div id="imageContainer"></div>
+    </div>
+    
+
     <script>
+        let currentTranscriptAnalysis = "";
+
         async function transcribeAudio() {
             clearMessages();
+            document.getElementById('transcript').value = "";
             
             const fileInput = document.getElementById('audioFile');
             const file = fileInput.files[0];
             
             if (!file) {
-                setError("Please select an audio file.");
+                setError("Transcribtion failed: Please select an audio file.");
                 return;
             }
 
@@ -138,13 +148,13 @@
                 const result = await response.json();
                 
                 if (result.error) {
-                    setError(result.error || "Transcription failed.");
+                    setError("Transcription failed: " + result.error);
                 } else {
                     document.getElementById('transcript').value = result.transcript;
                     setStatus("Transcription complete.");
                 }
             } catch (error) {
-                setError(error.message || "Transcription failed.");
+                setError("Transcription failed: " + error.message);
             }
         }
 
@@ -154,7 +164,7 @@
             const transcript = document.getElementById('transcript').value;
 
             if (!transcript.trim()) {
-                setError("Transcript is empty.");
+                setError("Analysis failed: Transcript is empty.");
                 return;
             }
 
@@ -172,9 +182,10 @@
                 const result = await response.json();
                 
                 if (result.error) {
-                    setError(result.error || "Analysis failed.");
+                    setError("Analysis failed: " + result.error);
                 } else {
                     displayAnalysisResults(result);
+                    currentTranscriptAnalysis = result.summary;
                     
                     // Refresh calendar and tasks after analysis
                     refreshCalendar();
@@ -183,7 +194,7 @@
                     setStatus("Analysis complete.");
                 }
             } catch (error) {
-                setError(error.message || "Analysis failed.");
+                setError("Analysis failed: " + result.error);
             }
         }
 
@@ -223,7 +234,7 @@
 
             const query = document.getElementById("searchInput").value.trim();
             if (!query) {
-                setError("Search query cannot be empty.");
+                setError("Search Failed: Search query cannot be empty.");
                 return;
             }
 
@@ -243,10 +254,10 @@
                     document.getElementById('searchResults').value = output || "No matches found.";
                     setStatus("Search complete.");
                 } else {
-                    setError(data.error || "Search failed.");
+                    setError("Search failed: " + data.error);
                 }
-            } catch (err) {
-                setError(data.error || "Search failed.");
+            } catch (error) {
+                setError("Search failed: " + error.message);
             }
         }
 
@@ -255,7 +266,7 @@
             const transcript = document.getElementById('transcript').value;
             
             if (!transcript.trim()) {
-                setError("Transcript is empty.");
+                setError("Prediction failed: Transcript is empty.");
                 return;
             }
 
@@ -272,10 +283,52 @@
                 document.getElementById('prediction').textContent = result.prediction || 'No prediction.';
                 setStatus("Prediction complete.");
             } catch (error) {
-                setError(error || "Prediction failed.");
+                setError("Prediction failed: " + error.message);
             }
         }
 
+        
+    
+        async function generateVisual() {
+            clearMessages();
+            const transcript = document.getElementById('transcript').value;
+            if (!transcript.trim()) {
+                setError("Visual generation failed: You need to analyze transcript first!");
+                return;
+            }
+            
+            setStatus("Generating visual summary...");
+            try {
+                const res = await fetch('/visualize', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ transcript: transcript })
+                });
+                
+                const data = await res.json();
+                if (res.ok) {
+                    const container = document.getElementById('imageContainer');
+                    container.innerHTML = '';
+                    
+                    data.slides["images"].forEach(slide => {
+                        const slideDiv = document.createElement('div');
+                        slideDiv.style.marginBottom = '20px';
+                        slideDiv.innerHTML = `
+                            <h3>${slide.title}</h3>
+                            <img src="${slide.url}" width="512" style="max-width:100%">
+                        `;
+                        container.appendChild(slideDiv);
+                    });
+                    
+                    setStatus(`Visual summary complete. ${data.total_slides} slides generated.`);
+                } else {
+                    setError("Visual generation failed: " + data.error);
+                }
+            } catch (error) {
+                setError("Visual generation failed: " + error.message);
+            }
+        }
+        
         async function refreshCalendar() {
             try {
                 const response = await fetch('/calendar');
@@ -296,7 +349,7 @@
                     `;
                 });
             } catch (error) {
-                setError(error || "Calendar event display failed.");
+                setError("Calendar event display failed: " + error.message);
             }
         }
 
@@ -321,10 +374,10 @@
                     `;
                 });
             } catch (error) {
-                setError(error || "Tasks display failed.");
+                setError("Tasks display failed: " + error.message);
             }
         }
-    
+
         function setStatus(msg) {
             document.getElementById('status').textContent = msg;
             document.getElementById('error').textContent = '';

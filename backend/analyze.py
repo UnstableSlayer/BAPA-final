@@ -209,8 +209,8 @@ def validate_time(time_str):
     except ValueError:
         return "09:00"  # Default fallback
 
-def analyze_transcript(transcript_text):
-    """Enhanced analysis that ensures all actionable items are captured and handles updates"""
+def analyze_transcript(transcript_text, chunk_size=4000):
+    """Enhanced analysis that processes transcript in chunks to handle large documents while avoiding duplicates"""
     
     if not transcript_text or not transcript_text.strip():
         return {"error": "No transcript text provided"}
@@ -222,234 +222,329 @@ def analyze_transcript(transcript_text):
     except Exception as e:
         return {"error": f"Failed to load existing data: {str(e)}"}
     
-    # Step 1: Extract all actionable items with awareness of existing items
-    extraction_prompt = f"""Analyze this meeting transcript and extract ALL actionable items. 
+    # Function to split transcript into chunks
+    def split_transcript(text, max_chunk_size):
+        """Split transcript into chunks at sentence boundaries to preserve context"""
+        sentences = text.split('. ')
+        chunks = []
+        current_chunk = ""
+        
+        for sentence in sentences:
+            # Add period back except for the last sentence
+            sentence_with_period = sentence + ('.' if sentence != sentences[-1] else '')
+            
+            if len(current_chunk + sentence_with_period) <= max_chunk_size:
+                current_chunk += sentence_with_period
+            else:
+                if current_chunk:
+                    chunks.append(current_chunk.strip())
+                current_chunk = sentence_with_period
+        
+        if current_chunk:
+            chunks.append(current_chunk.strip())
+        
+        return chunks
+    
+    # Split transcript into manageable chunks
+    chunks = split_transcript(transcript_text, chunk_size)
+    
+    # Collect all actionable items from all chunks
+    all_actionable_items = []
+    all_summaries = []
+    all_decisions = []
+    all_action_items = []
+    all_follow_up_meetings = []
+    
+    # Process each chunk
+    for i, chunk in enumerate(chunks):
+        # Step 1: Extract actionable items from this chunk
+        extraction_prompt = f"""Analyze this meeting transcript chunk ({i+1}/{len(chunks)}) and extract ALL actionable items. 
 
-    EXISTING CALENDAR EVENTS:
-    {json.dumps(calendar_data['events'], indent=2)}
+        CONTEXT: This is part of a larger meeting transcript being processed in chunks.
+        
+        EXISTING CALENDAR EVENTS:
+        {json.dumps(calendar_data['events'], indent=2)}
 
-    EXISTING TASKS:
-    {json.dumps(tasks_data['tasks'], indent=2)}
+        EXISTING TASKS:
+        {json.dumps(tasks_data['tasks'], indent=2)}
 
-    For each actionable item, determine the appropriate action:
-    1. CREATE NEW TASK
-    2. UPDATE EXISTING TASK (if referencing an existing task by ID, title, or context)
-    3. DELETE TASK (if task is cancelled or no longer needed)
-    4. CREATE NEW CALENDAR EVENT
-    5. UPDATE EXISTING CALENDAR EVENT (if rescheduling, changing details, or adding attendees)
-    6. DELETE CALENDAR EVENT (if meeting is cancelled)
+        For each actionable item, determine the appropriate action:
+        1. CREATE NEW TASK
+        2. UPDATE EXISTING TASK (if referencing an existing task by ID, title, or context)
+        3. DELETE TASK (if task is cancelled or no longer needed)
+        4. CREATE NEW CALENDAR EVENT
+        5. UPDATE EXISTING CALENDAR EVENT (if rescheduling, changing details, or adding attendees)
+        6. DELETE CALENDAR EVENT (if meeting is cancelled)
 
-    Return ONLY a JSON array with this exact format:
-    [
-    {{
-        "action": "create_task",
-        "title": "Task title",
-        "description": "Detailed description",
-        "assignee": "Person name",
-        "due_date": "YYYY-MM-DD",
-        "priority": "high/medium/low"
-    }},
-    {{
-        "action": "update_task",
-        "task_id": 1,
-        "title": "New title (optional)",
-        "assignee": "New assignee (optional)",
-        "status": "completed/in_progress/cancelled",
-        "due_date": "YYYY-MM-DD (optional)"
-    }},
-    {{
-        "action": "create_calendar",
-        "title": "Meeting title",
-        "date": "YYYY-MM-DD",
-        "time": "HH:MM",
-        "duration": "X hours/minutes",
-        "attendees": ["person1", "person2"]
-    }},
-    {{
-        "action": "update_calendar",
-        "event_id": 1,
-        "date": "YYYY-MM-DD (optional)",
-        "time": "HH:MM (optional)",
-        "attendees": ["new", "attendee", "list"] (optional)
-    }},
-    {{
-        "action": "delete_task",
-        "task_id": 1
-    }},
-    {{
-        "action": "delete_calendar",
-        "event_id": 1
-    }}
-    ]
+        Return ONLY a JSON array with this exact format:
+        [
+        {{
+            "action": "create_task",
+            "title": "Task title",
+            "description": "Detailed description",
+            "assignee": "Person name",
+            "due_date": "YYYY-MM-DD",
+            "priority": "high/medium/low",
+            "chunk_context": "Brief context from this chunk"
+        }},
+        {{
+            "action": "update_task",
+            "task_id": 1,
+            "title": "New title (optional)",
+            "assignee": "New assignee (optional)",
+            "status": "completed/in_progress/cancelled",
+            "due_date": "YYYY-MM-DD (optional)",
+            "chunk_context": "Brief context from this chunk"
+        }},
+        {{
+            "action": "create_calendar",
+            "title": "Meeting title",
+            "date": "YYYY-MM-DD",
+            "time": "HH:MM",
+            "duration": "X hours/minutes",
+            "attendees": ["person1", "person2"],
+            "chunk_context": "Brief context from this chunk"
+        }},
+        {{
+            "action": "update_calendar",
+            "event_id": 1,
+            "date": "YYYY-MM-DD (optional)",
+            "time": "HH:MM (optional)",
+            "attendees": ["new", "attendee", "list"] (optional),
+            "chunk_context": "Brief context from this chunk"
+        }},
+        {{
+            "action": "delete_task",
+            "task_id": 1,
+            "chunk_context": "Brief context from this chunk"
+        }},
+        {{
+            "action": "delete_calendar",
+            "event_id": 1,
+            "chunk_context": "Brief context from this chunk"
+        }}
+        ]
 
-    Look for keywords like:
-    - "postpone", "reschedule", "move the meeting" → UPDATE calendar
-    - "cancel", "no longer needed" → DELETE
-    - "completed", "done", "finished" → UPDATE task status
-    - "reassign", "change assignee" → UPDATE task
-    - "new task", "action item" → CREATE task
-    - "follow-up meeting", "schedule" → CREATE calendar
+        Look for keywords like:
+        - "postpone", "reschedule", "move the meeting" → UPDATE calendar
+        - "cancel", "no longer needed" → DELETE
+        - "completed", "done", "finished" → UPDATE task status
+        - "reassign", "change assignee" → UPDATE task
+        - "new task", "action item" → CREATE task
+        - "follow-up meeting", "schedule" → CREATE calendar
 
-    If dates/times are not specified, use reasonable defaults (today's date, 9 AM).
-    """
-
-    try:
-        # Extract actionable items
-        extraction_response = openai.chat.completions.create(
-            model="gpt-4",
-            messages=[
-                {"role": "system", "content": extraction_prompt},
-                {"role": "user", "content": transcript_text}
-            ],
-            temperature=0.3,
-            max_tokens=2000
-        )
-
-        actionable_items = []
-        try:
-            content = extraction_response.choices[0].message.content.strip()
-            # Remove any markdown formatting if present
-            if content.startswith("```json"):
-                content = content[7:]
-            if content.endswith("```"):
-                content = content[:-3]
-            actionable_items = json.loads(content)
-        except json.JSONDecodeError as e:
-            print(f"Failed to parse actionable items JSON: {e}")
-            actionable_items = []
-
-        # Step 2: Execute actions
-        function_results = []
-        for item in actionable_items:
-            try:
-                action = item.get("action", "")
-                
-                if action == "create_task":
-                    result = add_task(
-                        title=item.get("title", "Untitled Task"),
-                        description=item.get("description", ""),
-                        assignee=item.get("assignee", "Unassigned"),
-                        due_date=validate_date(item.get("due_date")),
-                        priority=item.get("priority", "medium")
-                    )
-                    function_results.append({
-                        "function": "add_task",
-                        "arguments": item,
-                        "result": result
-                    })
-                    
-                elif action == "update_task":
-                    updates = {k: v for k, v in item.items() if k not in ["action", "task_id"] and v is not None}
-                    if "due_date" in updates:
-                        updates["due_date"] = validate_date(updates["due_date"])
-                    result = update_task(item.get("task_id"), **updates)
-                    function_results.append({
-                        "function": "update_task",
-                        "arguments": item,
-                        "result": result
-                    })
-                    
-                elif action == "delete_task":
-                    result = delete_task(item.get("task_id"))
-                    function_results.append({
-                        "function": "delete_task",
-                        "arguments": item,
-                        "result": result
-                    })
-                    
-                elif action == "create_calendar":
-                    result = add_calendar_event(
-                        title=item.get("title", "Untitled Meeting"),
-                        date=validate_date(item.get("date")),
-                        time=validate_time(item.get("time")),
-                        duration=item.get("duration", "1 hour"),
-                        attendees=item.get("attendees", [])
-                    )
-                    function_results.append({
-                        "function": "add_calendar_event",
-                        "arguments": item,
-                        "result": result
-                    })
-                    
-                elif action == "update_calendar":
-                    updates = {k: v for k, v in item.items() if k not in ["action", "event_id"] and v is not None}
-                    if "date" in updates:
-                        updates["date"] = validate_date(updates["date"])
-                    if "time" in updates:
-                        updates["time"] = validate_time(updates["time"])
-                    result = update_calendar_event(item.get("event_id"), **updates)
-                    function_results.append({
-                        "function": "update_calendar_event",
-                        "arguments": item,
-                        "result": result
-                    })
-                    
-                elif action == "delete_calendar":
-                    result = delete_calendar_event(item.get("event_id"))
-                    function_results.append({
-                        "function": "delete_calendar_event",
-                        "arguments": item,
-                        "result": result
-                    })
-                    
-            except Exception as e:
-                function_results.append({
-                    "function": f"{action}",
-                    "arguments": item,
-                    "result": f"Error: {str(e)}"
-                })
-
-        # Step 3: Generate comprehensive analysis
-        analysis_prompt = """Analyze this meeting transcript and provide a comprehensive summary. Return ONLY valid JSON in this exact format:
-        {
-            "summary": "Comprehensive meeting summary including key topics discussed and outcomes",
-            "decisions": ["Decision 1 made during the meeting", "Decision 2"],
-            "action_items": ["Action item 1", "Action item 2"],
-            "follow_up_meetings": ["Follow-up meeting 1", "Follow-up meeting 2"]
-        }
+        If dates/times are not specified, use reasonable defaults (today's date, 9 AM).
         """
 
-        analysis_response = openai.chat.completions.create(
-            model="gpt-4",
-            messages=[
-                {"role": "system", "content": analysis_prompt},
-                {"role": "user", "content": transcript_text}
-            ],
-            temperature=0.3,
-            max_tokens=1500
-        )
-
-        # Parse the analysis
-        analysis_result = {
-            "summary": "",
-            "decisions": [],
-            "action_items": [],
-            "follow_up_meetings": []
-        }
-
         try:
-            content = analysis_response.choices[0].message.content.strip()
-            # Remove any markdown formatting if present
-            if content.startswith("```json"):
-                content = content[7:]
-            if content.endswith("```"):
-                content = content[:-3]
-            analysis_data = json.loads(content)
-            analysis_result.update(analysis_data)
-        except json.JSONDecodeError:
-            analysis_result["summary"] = analysis_response.choices[0].message.content
+            # Extract actionable items from this chunk
+            extraction_response = openai.chat.completions.create(
+                model="gpt-4",
+                messages=[
+                    {"role": "system", "content": extraction_prompt},
+                    {"role": "user", "content": chunk}
+                ],
+                temperature=0.3,
+                max_tokens=2000
+            )
 
-        # Combine results
-        final_result = analysis_result.copy()
-        final_result["function_calls"] = function_results
-        final_result["actionable_items_found"] = len(actionable_items)
+            chunk_actionable_items = []
+            try:
+                content = extraction_response.choices[0].message.content.strip()
+                # Remove any markdown formatting if present
+                if content.startswith("```json"):
+                    content = content[7:]
+                if content.endswith("```"):
+                    content = content[:-3]
+                chunk_actionable_items = json.loads(content)
+            except json.JSONDecodeError as e:
+                print(f"Failed to parse actionable items JSON for chunk {i+1}: {e}")
+                chunk_actionable_items = []
 
-        return final_result
+            all_actionable_items.extend(chunk_actionable_items)
 
-    except openai.APIError as e:
-        return {"error": f"OpenAI API error: {str(e)}"}
-    except Exception as e:
-        return {"error": f"Enhanced analysis failed: {str(e)}"}
+            # Generate analysis for this chunk
+            analysis_prompt = """Analyze this meeting transcript chunk and provide a summary. Return ONLY valid JSON in this exact format:
+            {
+                "summary": "Summary of key topics discussed in this chunk",
+                "decisions": ["Decision 1 made in this chunk", "Decision 2"],
+                "action_items": ["Action item 1", "Action item 2"],
+                "follow_up_meetings": ["Follow-up meeting 1", "Follow-up meeting 2"]
+            }
+            """
+
+            analysis_response = openai.chat.completions.create(
+                model="gpt-4",
+                messages=[
+                    {"role": "system", "content": analysis_prompt},
+                    {"role": "user", "content": chunk}
+                ],
+                temperature=0.3,
+                max_tokens=1000
+            )
+
+            try:
+                content = analysis_response.choices[0].message.content.strip()
+                if content.startswith("```json"):
+                    content = content[7:]
+                if content.endswith("```"):
+                    content = content[:-3]
+                chunk_analysis = json.loads(content)
+                
+                all_summaries.append(chunk_analysis.get("summary", ""))
+                all_decisions.extend(chunk_analysis.get("decisions", []))
+                all_action_items.extend(chunk_analysis.get("action_items", []))
+                all_follow_up_meetings.extend(chunk_analysis.get("follow_up_meetings", []))
+            except json.JSONDecodeError:
+                all_summaries.append(analysis_response.choices[0].message.content)
+
+        except openai.APIError as e:
+            print(f"OpenAI API error for chunk {i+1}: {str(e)}")
+            continue
+        except Exception as e:
+            print(f"Error processing chunk {i+1}: {str(e)}")
+            continue
+
+    # Step 2: Remove duplicates and consolidate actionable items
+    def remove_duplicate_items(items):
+        """Remove duplicate actionable items based on similarity"""
+        unique_items = []
+        seen_items = set()
+        
+        for item in items:
+            # Create a signature for the item based on action, title, and key details
+            if item.get("action") == "create_task":
+                signature = f"create_task:{item.get('title', '').lower()}:{item.get('assignee', '').lower()}"
+            elif item.get("action") == "create_calendar":
+                signature = f"create_calendar:{item.get('title', '').lower()}:{item.get('date', '')}:{item.get('time', '')}"
+            elif item.get("action") in ["update_task", "delete_task"]:
+                signature = f"{item.get('action')}:task_{item.get('task_id')}"
+            elif item.get("action") in ["update_calendar", "delete_calendar"]:
+                signature = f"{item.get('action')}:event_{item.get('event_id')}"
+            else:
+                signature = f"{item.get('action')}:{str(item)}"
+            
+            if signature not in seen_items:
+                seen_items.add(signature)
+                unique_items.append(item)
+        
+        return unique_items
+
+    # Remove duplicates
+    unique_actionable_items = remove_duplicate_items(all_actionable_items)
+
+    # Step 3: Execute actions
+    function_results = []
+    for item in unique_actionable_items:
+        try:
+            action = item.get("action", "")
+            
+            if action == "create_task":
+                result = add_task(
+                    title=item.get("title", "Untitled Task"),
+                    description=item.get("description", ""),
+                    assignee=item.get("assignee", "Unassigned"),
+                    due_date=validate_date(item.get("due_date")),
+                    priority=item.get("priority", "medium")
+                )
+                function_results.append({
+                    "function": "add_task",
+                    "arguments": {k: v for k, v in item.items() if k != "chunk_context"},
+                    "result": result
+                })
+                
+            elif action == "update_task":
+                updates = {k: v for k, v in item.items() if k not in ["action", "task_id", "chunk_context"] and v is not None}
+                if "due_date" in updates:
+                    updates["due_date"] = validate_date(updates["due_date"])
+                result = update_task(item.get("task_id"), **updates)
+                function_results.append({
+                    "function": "update_task",
+                    "arguments": {k: v for k, v in item.items() if k != "chunk_context"},
+                    "result": result
+                })
+                
+            elif action == "delete_task":
+                result = delete_task(item.get("task_id"))
+                function_results.append({
+                    "function": "delete_task",
+                    "arguments": {k: v for k, v in item.items() if k != "chunk_context"},
+                    "result": result
+                })
+                
+            elif action == "create_calendar":
+                result = add_calendar_event(
+                    title=item.get("title", "Untitled Meeting"),
+                    date=validate_date(item.get("date")),
+                    time=validate_time(item.get("time")),
+                    duration=item.get("duration", "1 hour"),
+                    attendees=item.get("attendees", [])
+                )
+                function_results.append({
+                    "function": "add_calendar_event",
+                    "arguments": {k: v for k, v in item.items() if k != "chunk_context"},
+                    "result": result
+                })
+                
+            elif action == "update_calendar":
+                updates = {k: v for k, v in item.items() if k not in ["action", "event_id", "chunk_context"] and v is not None}
+                if "date" in updates:
+                    updates["date"] = validate_date(updates["date"])
+                if "time" in updates:
+                    updates["time"] = validate_time(updates["time"])
+                result = update_calendar_event(item.get("event_id"), **updates)
+                function_results.append({
+                    "function": "update_calendar_event",
+                    "arguments": {k: v for k, v in item.items() if k != "chunk_context"},
+                    "result": result
+                })
+                
+            elif action == "delete_calendar":
+                result = delete_calendar_event(item.get("event_id"))
+                function_results.append({
+                    "function": "delete_calendar_event",
+                    "arguments": {k: v for k, v in item.items() if k != "chunk_context"},
+                    "result": result
+                })
+                
+        except Exception as e:
+            function_results.append({
+                "function": f"{action}",
+                "arguments": {k: v for k, v in item.items() if k != "chunk_context"},
+                "result": f"Error: {str(e)}"
+            })
+
+    # Step 4: Consolidate and deduplicate analysis results
+    def deduplicate_list(items):
+        """Remove duplicates while preserving order"""
+        seen = set()
+        unique_items = []
+        for item in items:
+            item_lower = item.lower().strip()
+            if item_lower not in seen and item.strip():
+                seen.add(item_lower)
+                unique_items.append(item.strip())
+        return unique_items
+
+    # Combine and clean up analysis results
+    consolidated_summary = " ".join(filter(None, all_summaries))
+    unique_decisions = deduplicate_list(all_decisions)
+    unique_action_items = deduplicate_list(all_action_items)
+    unique_follow_up_meetings = deduplicate_list(all_follow_up_meetings)
+
+    # Create final consolidated analysis
+    final_result = {
+        "summary": consolidated_summary,
+        "decisions": unique_decisions,
+        "action_items": unique_action_items,
+        "follow_up_meetings": unique_follow_up_meetings,
+        "function_calls": function_results,
+        "actionable_items_found": len(unique_actionable_items),
+        "chunks_processed": len(chunks),
+        "duplicates_removed": len(all_actionable_items) - len(unique_actionable_items)
+    }
+
+    return final_result
 
 # Additional utility functions for better error handling
 def initialize_system():
